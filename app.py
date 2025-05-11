@@ -1,15 +1,21 @@
-"""A dash app with controls, callbacks, and file upload functionality"""
+"""A dash app with controls, callbacks, file upload, and storage functionality"""
 import base64
 import io
+import os
+from datetime import datetime
+
+import dash_bootstrap_components as dbc
 import pandas as pd
 import plotly.express as px
-from dash import Dash, Input, Output, callback, dash_table, dcc, html
-import dash_bootstrap_components as dbc
-
-# dcc = dash core components
+from dash import Dash, Input, Output, callback, dash_table, dcc, html, State
 
 # Incorporate default data
 df = pd.read_csv('https://raw.githubusercontent.com/plotly/datasets/master/gapminder2007.csv')
+
+# Create a data directory if it doesn't exist
+UPLOAD_DIRECTORY = "uploads"
+if not os.path.exists(UPLOAD_DIRECTORY):
+    os.makedirs(UPLOAD_DIRECTORY)
 
 # Initialize the app - incorporate a Dash Bootstrap theme
 external_stylesheets = [dbc.themes.CERULEAN]
@@ -46,11 +52,22 @@ app.layout = dbc.Container([
             html.Div(id='upload-status')
         ])
     ]),
+    # Uploaded files
+    dbc.Row([
+        dbc.Col([
+            html.H5("Stored Files:"),
+            html.Ul(id='file-list')
+        ])
+    ]),
+
+    # Radio button
     dbc.Row([
         dbc.RadioItems(
             options=[{"label": x, "value": x} for x in ["pop", 'lifeExp', 'gdpPercap']],
             value="lifeExp", inline=True, id='radio-buttons-final')
     ]),
+
+    # Table and chart
     dbc.Row([
             dbc.Col([
                 dash_table.DataTable(
@@ -69,16 +86,31 @@ app.layout = dbc.Container([
 @callback(
     Output('table-component', 'data'),
     Output('upload-status', 'children'),
+    Output('file-list', 'children'),
     Input('upload-data', 'contents'),
+    Input('upload-data', 'filename'),
     prevent_initial_calll=True
 )
-def update_output(contents):
+def update_output(contents, filename):
     if contents is not None:
-        df = parse_contents(contents)
+        df, saved_filename, error = save_file(contents, filename)
+        
+        # Update file list
+        files = get_file_list()
+        file_list = [html.Li(file) for file in files]
+
+        if error:
+            return [], html.Div(f'Error: {error}', style={'color': 'red'}), file_list
+        
         if df is not None:
-            return df.to_dict('records'), html.Div('Upload successful!')
-        return [], html.Div('Error processing file!', style={'color': 'red'})
-    return [], html.Div()
+            return df.to_dict('records'), html.Div([
+                f'File "{filename}" uploaded and saved as "{saved_filename}"'
+            ]), file_list
+        
+    # Default return if no file is uploaded
+    files = get_file_list()
+    file_list = [html.Li(file) for file in files]
+    return [], html.Div(), file_list
 
 # Parse uploaded file
 def parse_contents(contents):
@@ -91,6 +123,52 @@ def parse_contents(contents):
         print(e)
         return None
 
+# Save uploaded file
+def save_file(contents, filename):
+    content_type, content_string = contents.split(',')
+    decoded = base64.b64decode(content_string)
+
+    # Generate unique filename with timestamp
+    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    clean_filename = ''.join(c if c.isalnum() or c in ['.', '-', '_'] else '_' for c in filename)
+    safe_filename = f"{timestamp}_{clean_filename}"
+    filepath = os.path.join(UPLOAD_DIRECTORY, safe_filename)
+
+    try:
+        # Save file to uploads directory
+        with open(filepath, "wb") as f:
+            f.write(decoded)
+        
+        # Read file back as dataframe
+        if filename.endswith('.csv'):
+            df = pd.read_csv(filepath)
+            return df, safe_filename, None
+        else:
+            return None, safe_filename, "Only CSV files are supported for visualization"
+    except Exception as e:
+        return None, None, str(e)
+
+# Load file from storage
+@callback(
+    Output('table-component', 'data', allow_duplicate=True),
+    Output('upload-status', 'children', allow_duplicate=True),
+    Input('file-list', 'children'),
+    State('file-list', 'children'),
+    prevent_initial_call=True
+)
+def load_file(n_clicks, file_list):
+    # This is a simplified version - clicking on the file list would load the file
+    # In a real app, you'd want to have clickable file names or buttons
+    
+    # For now, just show a message
+    return [], html.Div("Click on a file to load it (functionality not implemented in this example)")
+
+
+# Get list of files in the uploads directory
+def get_file_list():
+    if not os.path.exists(UPLOAD_DIRECTORY):
+        return []
+    return sorted([f for f in os.listdir(UPLOAD_DIRECTORY) if not f.startswith('.')])
 
 # Add controls to build the interaction
 @callback(
